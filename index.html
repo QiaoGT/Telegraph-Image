@@ -102,6 +102,7 @@
     <label for="fileInput" class="btn btn-primary">选择文件</label>
     <input id="fileInput" type="file" accept="*/*">
     <button id="uploadBtn" class="btn btn-ghost" type="button">开始上传</button>
+    <button id="cancelBtn" class="btn btn-ghost" type="button" style="display:none">取消上传</button>
     <button id="copyBtn" class="btn btn-ghost" type="button">复制链接</button>
   </div>
 
@@ -118,6 +119,7 @@
 <script>
   const fileInput = document.getElementById("fileInput");
   const uploadBtn = document.getElementById("uploadBtn");
+  const cancelBtn = document.getElementById("cancelBtn");
   const copyBtn = document.getElementById("copyBtn");
   const statusEl = document.getElementById("status");
   const progressWrap = document.getElementById("progressWrap");
@@ -125,6 +127,7 @@
   const urlOut = document.getElementById("urlOut");
   const mdOut = document.getElementById("mdOut");
   let selectedFile = null;
+  let activeUpload = null;
 
   function setStatus(msg, type) {
     statusEl.textContent = msg;
@@ -139,32 +142,117 @@
     progressBar.style.width = "0%";
   }
 
-  function uploadWithProgress(file) {
-    return new Promise((resolve, reject) => {
-      const fd = new FormData();
-      fd.append("file", file);
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", "/upload");
-      xhr.upload.onprogress = (ev) => {
-        if (!ev.lengthComputable) return;
-        const pct = (ev.loaded / ev.total) * 100;
-        setProgress(pct);
-        setStatus(`上传中 ${pct.toFixed(1)}%`);
-      };
-      xhr.onload = () => {
-        if (xhr.status < 200 || xhr.status >= 300) {
-          reject(new Error("Upload failed: HTTP " + xhr.status + " " + xhr.responseText));
-          return;
-        }
+  function createUploadContext() {
+    const ctx = {
+      cancelled: false,
+      controllers: new Set(),
+      cancel() {
+        this.cancelled = true;
+        for (const c of this.controllers) c.abort();
+        this.controllers.clear();
+      },
+      track(controller) {
+        this.controllers.add(controller);
+      },
+      untrack(controller) {
+        this.controllers.delete(controller);
+      },
+    };
+    return ctx;
+  }
+
+  async function fetchWithAbort(url, options, ctx) {
+    const controller = new AbortController();
+    ctx.track(controller);
+    try {
+      return await fetch(url, { ...(options || {}), signal: controller.signal });
+    } finally {
+      ctx.untrack(controller);
+    }
+  }
+
+  function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  async function uploadWithMultipart(file, ctx) {
+    const initRes = await fetchWithAbort("/api/upload/init", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: file.name,
+        size: file.size,
+        contentType: file.type || "",
+      }),
+    }, ctx);
+    if (!initRes.ok) throw new Error("Init failed: " + initRes.status);
+    const init = await initRes.json();
+    const { uploadId, key, partSize, totalParts, contentType, originalName, fileType } = init;
+    if (!uploadId || !key) throw new Error("Init response invalid");
+
+    const parts = new Array(totalParts);
+    let uploadedBytes = 0;
+
+    async function uploadPart(i) {
+      const start = i * partSize;
+      const end = Math.min(file.size, start + partSize);
+      const blob = file.slice(start, end);
+      const partNumber = i + 1;
+      let attempt = 0;
+      while (attempt < 3) {
+        if (ctx.cancelled) throw new Error("Upload cancelled");
         try {
-          resolve(JSON.parse(xhr.responseText));
-        } catch {
-          reject(new Error("Upload response format invalid"));
+          const res = await fetchWithAbort(
+            `/api/upload/part?key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=${partNumber}`,
+            { method: "PUT", body: blob },
+            ctx
+          );
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          parts[i] = { partNumber, etag: data.etag };
+          uploadedBytes += blob.size;
+          const pct = (uploadedBytes / file.size) * 100;
+          setProgress(pct);
+          setStatus(`上传中 ${pct.toFixed(1)}%`);
+          return;
+        } catch (e) {
+          attempt += 1;
+          if (ctx.cancelled) throw new Error("Upload cancelled");
+          if (attempt >= 3) {
+            throw new Error(`Part ${partNumber} failed after 3 attempts: ${e.message || e}`);
+          }
+          await sleep(300 * attempt);
         }
-      };
-      xhr.onerror = () => reject(new Error("Network error"));
-      xhr.send(fd);
+      }
+    }
+
+    const parallel = 3;
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(parallel, totalParts) }, async () => {
+      while (cursor < totalParts) {
+        const i = cursor++;
+        await uploadPart(i);
+      }
     });
+    await Promise.all(workers);
+
+    const completeRes = await fetchWithAbort("/api/upload/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        key,
+        uploadId,
+        originalName,
+        fileType,
+        contentType,
+        size: file.size,
+        parts,
+      }),
+    }, ctx);
+    if (!completeRes.ok) {
+      throw new Error("Complete failed: " + completeRes.status);
+    }
+    return completeRes.json();
   }
 
   fileInput.addEventListener("change", () => {
@@ -182,8 +270,12 @@
       return;
     }
     try {
+      if (activeUpload) return;
+      activeUpload = createUploadContext();
+      cancelBtn.style.display = "inline-block";
+      uploadBtn.disabled = true;
       resetProgress();
-      const json = await uploadWithProgress(selectedFile);
+      const json = await uploadWithMultipart(selectedFile, activeUpload);
       const src = json && json[0] && json[0].src;
       if (!src) throw new Error("Missing src");
       const url = `${location.origin}${decodeURIComponent(src)}`;
@@ -194,8 +286,21 @@
       setTimeout(resetProgress, 700);
     } catch (e) {
       console.error(e);
-      setStatus("上传失败，请重试", "err");
+      if (String(e && e.message || e).includes("cancel")) {
+        setStatus("已取消上传", "err");
+      } else {
+        setStatus("上传失败，请重试", "err");
+      }
+    } finally {
+      activeUpload = null;
+      cancelBtn.style.display = "none";
+      uploadBtn.disabled = false;
     }
+  });
+
+  cancelBtn.addEventListener("click", () => {
+    if (!activeUpload) return;
+    activeUpload.cancel();
   });
 
   copyBtn.addEventListener("click", async () => {
