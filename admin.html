@@ -102,7 +102,7 @@
 
         return `
           <tr>
-            <td>${escapeHtml(display)}</td>
+            <td><a class="link" href="${url}" target="_blank">${escapeHtml(display)}</a></td>
             <td>${escapeHtml(uploadTime)}</td>
             <td>${escapeHtml(sizeKB)}</td>
             <td><span class="tag">${escapeHtml(ftype)}</span></td>
