@@ -21,6 +21,17 @@
     .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
     h1 { margin: 0; font-size: 28px; }
     .search { width: 340px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; }
+    .toolbar { display: flex; gap: 8px; align-items: center; }
+    .btn-batch {
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      color: #fff;
+      background: var(--err);
+      font-size: 13px;
+      font-weight: 700;
+    }
     .summary { color: var(--muted); margin: 8px 0 16px; }
     table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
     th, td { border-bottom: 1px solid #edf2f8; padding: 10px; vertical-align: top; font-size: 13px; }
@@ -45,12 +56,16 @@
   <div class="wrap">
     <div class="top">
       <h1>Dashboard</h1>
-      <input id="search" class="search" placeholder="按文件名搜索">
+      <div class="toolbar">
+        <button id="deleteSelectedBtn" class="btn-batch" type="button">删除选中</button>
+        <input id="search" class="search" placeholder="按文件名搜索">
+      </div>
     </div>
     <div id="summary" class="summary">加载中...</div>
     <table>
       <thead>
         <tr>
+          <th><input id="selectAll" type="checkbox" title="全选/取消全选"></th>
           <th>文件名</th>
           <th>上传时间</th>
           <th>大小(KB)</th>
@@ -67,9 +82,12 @@
 
   <script>
     let tableData = [];
+    const selectedKeys = new Set();
     const rowsEl = document.getElementById("rows");
     const summaryEl = document.getElementById("summary");
     const searchEl = document.getElementById("search");
+    const selectAllEl = document.getElementById("selectAll");
+    const deleteSelectedBtn = document.getElementById("deleteSelectedBtn");
 
     function extOf(name) {
       const i = name.lastIndexOf(".");
@@ -82,9 +100,24 @@
       return String(s || "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
     }
 
-    function render() {
+    function getFilteredData() {
       const q = searchEl.value.trim().toLowerCase();
-      const data = tableData.filter(x => !q || (x.originalName || x.name || "").toLowerCase().includes(q));
+      return tableData.filter(x => !q || (x.originalName || x.name || "").toLowerCase().includes(q));
+    }
+
+    function updateSelectAllState(data) {
+      if (!data.length) {
+        selectAllEl.checked = false;
+        selectAllEl.indeterminate = false;
+        return;
+      }
+      const checkedCount = data.reduce((n, r) => n + (selectedKeys.has(r.name) ? 1 : 0), 0);
+      selectAllEl.checked = checkedCount === data.length;
+      selectAllEl.indeterminate = checkedCount > 0 && checkedCount < data.length;
+    }
+
+    function render() {
+      const data = getFilteredData();
       summaryEl.textContent = `记录总数：${data.length}`;
 
       rowsEl.innerHTML = data.map((row) => {
@@ -102,6 +135,7 @@
 
         return `
           <tr>
+            <td><input class="row-check" type="checkbox" data-key="${encodeURIComponent(name)}" ${selectedKeys.has(name) ? "checked" : ""}></td>
             <td><a class="link" href="${url}" target="_blank">${escapeHtml(display)}</a></td>
             <td>${escapeHtml(uploadTime)}</td>
             <td>${escapeHtml(sizeKB)}</td>
@@ -119,6 +153,17 @@
             </td>
           </tr>`;
       }).join("");
+
+      rowsEl.querySelectorAll(".row-check").forEach((el) => {
+        el.addEventListener("change", () => {
+          const key = decodeURIComponent(el.getAttribute("data-key") || "");
+          if (!key) return;
+          if (el.checked) selectedKeys.add(key);
+          else selectedKeys.delete(key);
+          updateSelectAllState(data);
+        });
+      });
+      updateSelectAllState(data);
     }
 
     async function api(path) {
@@ -131,6 +176,7 @@
     async function loadData() {
       const data = await api("./api/manage/list");
       tableData = Array.isArray(data) ? data : [];
+      selectedKeys.clear();
       render();
     }
 
@@ -156,6 +202,30 @@
     };
 
     searchEl.addEventListener("input", render);
+    selectAllEl.addEventListener("change", () => {
+      const data = getFilteredData();
+      if (selectAllEl.checked) {
+        data.forEach((r) => selectedKeys.add(r.name));
+      } else {
+        data.forEach((r) => selectedKeys.delete(r.name));
+      }
+      render();
+    });
+
+    deleteSelectedBtn.addEventListener("click", async () => {
+      if (selectedKeys.size === 0) {
+        alert("请先勾选文件");
+        return;
+      }
+      if (!confirm(`确认删除选中的 ${selectedKeys.size} 个文件？`)) return;
+      const toDelete = Array.from(selectedKeys);
+      for (const name of toDelete) {
+        await api(`./api/manage/delete/${encodeURIComponent(name)}`);
+      }
+      await loadData();
+      alert("删除完成");
+    });
+
     loadData().catch((e) => {
       console.error(e);
       summaryEl.textContent = "加载失败，请检查鉴权或网络。";
