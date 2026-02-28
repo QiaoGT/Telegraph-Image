@@ -1,17 +1,14 @@
-export async function onRequest(context) {
-    // Contents of context object
-    const {
-      request, // same as existing Worker API
-      env, // same as existing Worker API
-      params, // if filename includes [id] or [[path]]
-      waitUntil, // same as ctx.waitUntil in existing Worker API
-      next, // used for middleware or to fetch assets
-      data, // arbitrary space for passing data between middlewares
-    } = context;
-    console.log(env)
-    console.log(params.id)
-    await env.img_url.delete(params.id);
-    const info = JSON.stringify(params.id);
-    return new Response(info);
+import { deleteRecord } from "../../../_lib/storage";
 
+export async function onRequest(context) {
+  const { env, params } = context;
+  const id = decodeURIComponent(params.id || "");
+  if (!id) return new Response("Missing id", { status: 400 });
+
+  const key = await deleteRecord(env, id);
+  if (env.FILE_BUCKET) {
+    await env.FILE_BUCKET.delete(key || id);
   }
+
+  return Response.json({ id, deleted: true });
+}

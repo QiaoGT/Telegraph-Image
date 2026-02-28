@@ -1,111 +1,92 @@
-export async function onRequest(context) {  // Contents of context object  
-    const {   
-        request, // same as existing Worker API    
-    env, // same as existing Worker API    
-    params, // if filename includes [id] or [[path]]   
-     waitUntil, // same as ctx.waitUntil in existing Worker API    
-     next, // used for middleware or to fetch assets    
-     data, // arbitrary space for passing data between middlewares 
-     } = context;
-     context.request
-     const url = new URL(request.url);
-    
-    const response = fetch('https://telegra.ph/' + url.pathname + url.search, {
-         method: request.method,
-         headers: request.headers,
-         body: request.body,
-     }).then(async (response) => {
-        console.log(response.ok); // true if the response status is 2xx
-        console.log(response.status); // 200
-        if(response.ok){
-            // Referer header equal to the admin page
-            console.log(url.origin+"/admin")
-            if (request.headers.get('Referer') == url.origin+"/admin") {
-                //show the image
-                return response;
-            }
+import { getRecord, upsertRecord } from "../_lib/storage";
 
-        if (typeof env.img_url == "undefined" || env.img_url == null || env.img_url == ""){}else{
-            //check the record from kv
-            const record = await env.img_url.getWithMetadata(params.id); 
-            console.log("record")
-            console.log(record)
-            if (record.metadata === null) {
+function isBlocked(record) {
+  if (!record) return false;
+  return record.listType === "Block" || record.label === "adult";
+}
 
-            }else{
-                
-                //if the record is not null, redirect to the image
-                if (record.metadata.ListType=="White"){
-                    return response;
-                }else if (record.metadata.ListType=="Block"){
-                    console.log("Referer")
-                    console.log(request.headers.get('Referer'))
-                    if(typeof request.headers.get('Referer') == "undefined" ||request.headers.get('Referer') == null || request.headers.get('Referer') == ""){
-                        return Response.redirect(url.origin+"/block-img.html", 302)
-                    }else{
-                        return Response.redirect("https://static-res.pages.dev/teleimage/img-block-compressed.png", 302)
-                    }
+function isAdminReferer(request, origin) {
+  const referer = request.headers.get("Referer") || "";
+  return referer === `${origin}/admin` || referer === `${origin}/admin.html`;
+}
 
-                }else if (record.metadata.Label=="adult"){
-                    if(typeof request.headers.get('Referer') == "undefined" ||request.headers.get('Referer') == null || request.headers.get('Referer') == ""){
-                        return Response.redirect(url.origin+"/block-img.html", 302)
-                    }else{
-                        return Response.redirect("https://static-res.pages.dev/teleimage/img-block-compressed.png", 302)
-                    }
-                }
-                //check if the env variables WhiteList_Mode are set
-                console.log("env.WhiteList_Mode:",env.WhiteList_Mode)
-                if (env.WhiteList_Mode=="true"){
-                    //if the env variables WhiteList_Mode are set, redirect to the image
-                    return Response.redirect(url.origin+"/whitelist-on.html", 302);
-                }else{
-                    //if the env variables WhiteList_Mode are not set, redirect to the image
-                    return response;
-                }
-            }
-            
-        }
-
-        //get time
-        let time = new Date().getTime();
-        
-        let apikey=env.ModerateContentApiKey
-        
-            if(typeof apikey == "undefined" || apikey == null || apikey == ""){
-                
-                if (typeof env.img_url == "undefined" || env.img_url == null || env.img_url == ""){
-                    console.log("Not enbaled KV")
-                    
-                }else{
-                    //add image to kv
-                    await env.img_url.put(params.id, "",{
-                        metadata: { ListType: "None", Label: "None",TimeStamp: time },
-                    });
-                    
-                }
-            }else{
-                await fetch(`https://api.moderatecontent.com/moderate/?key=`+apikey+`&url=https://telegra.ph/` + url.pathname + url.search).
-                then(async (response) => {
-                    let moderate_data = await response.json();
-                    console.log(moderate_data)
-                    console.log("---env.img_url---")
-                    console.log(env.img_url=="true")
-                    if (typeof env.img_url == "undefined" || env.img_url == null || env.img_url == ""){}else{
-                        //add image to kv
-                        await env.img_url.put(params.id, "",{
-                            metadata: { ListType: "None", Label: moderate_data.rating_label,TimeStamp: time },
-                        });
-                    }  
-                    if (moderate_data.rating_label=="adult"){
-                        return Response.redirect(url.origin+"/block-img.html", 302)
-                    }});
-             
-            }
-        }
-        return response;
-     });
-
-    return response;
-    
+function blockRedirect(url, request) {
+  const referer = request.headers.get("Referer");
+  if (!referer) {
+    return Response.redirect(`${url.origin}/block-img.html`, 302);
   }
+  return Response.redirect(
+    "https://static-res.pages.dev/teleimage/img-block-compressed.png",
+    302
+  );
+}
+
+function setObjectHeaders(headers, object) {
+  headers.set("Cache-Control", "public, max-age=31536000, immutable");
+  const ct = object.httpMetadata?.contentType;
+  if (ct) headers.set("Content-Type", ct);
+  if (typeof object.size === "number") {
+    headers.set("Content-Length", String(object.size));
+  }
+  const etag = object.httpEtag || object.etag;
+  if (etag) headers.set("ETag", etag);
+}
+
+export async function onRequest(context) {
+  const { request, env, params } = context;
+  const url = new URL(request.url);
+  const id = decodeURIComponent(params.id || "");
+
+  if (!id) {
+    return new Response("Not Found", { status: 404 });
+  }
+
+  const record = await getRecord(env, id);
+  if (!isAdminReferer(request, url.origin)) {
+    if (isBlocked(record)) {
+      return blockRedirect(url, request);
+    }
+    if (env.WhiteList_Mode === "true" && record?.listType !== "White") {
+      return Response.redirect(`${url.origin}/whitelist-on.html`, 302);
+    }
+  }
+
+  if (env.FILE_BUCKET) {
+    const method = request.method.toUpperCase();
+    if (method !== "GET" && method !== "HEAD") {
+      return new Response("Method Not Allowed", { status: 405 });
+    }
+
+    const object = await env.FILE_BUCKET.get(id);
+    if (object) {
+      if (!record) {
+        await upsertRecord(env, {
+          id,
+          key: id,
+          source: "r2",
+          contentType: object.httpMetadata?.contentType || "application/octet-stream",
+          size: object.size || 0,
+          ext: id.includes(".") ? id.slice(id.lastIndexOf(".")) : "",
+          listType: "None",
+          label: "None",
+          timeStamp: Date.now(),
+        });
+      }
+
+      const headers = new Headers();
+      setObjectHeaders(headers, object);
+      if (method === "HEAD") {
+        return new Response(null, { headers });
+      }
+      return new Response(object.body, { headers });
+    }
+  }
+
+  // Backward compatibility: existing Telegraph paths can still be accessed.
+  return fetch(`https://telegra.ph/file/${id}`, {
+    method: request.method,
+    headers: request.headers,
+    body: request.body,
+  });
+}
   

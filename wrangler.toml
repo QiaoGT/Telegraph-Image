@@ -1,0 +1,16 @@
+name = "telegraph-image"
+compatibility_date = "2026-02-28"
+pages_build_output_dir = "."
+
+[[r2_buckets]]
+binding = "FILE_BUCKET"
+bucket_name = "telegraph-image-files"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "telegraph_image"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[[kv_namespaces]]
+binding = "img_url"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"

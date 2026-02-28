@@ -1,63 +1,115 @@
 # Telegraph-Image
 
-Free Image Hosting solution, Flickr/imgur alternative. Using Cloudflare Pages and Telegraph.
+<p align="center">
+  <img src="./assets/readme-banner.svg" alt="Telegraph-Image Banner" width="100%"/>
+</p>
 
-English|[中文](readme-zh.md)
+<p align="center">
+  <img alt="Cloudflare" src="https://img.shields.io/badge/Cloudflare-Pages%20%2B%20Workers-F38020?style=for-the-badge&logo=cloudflare&logoColor=white" />
+  <img alt="R2" src="https://img.shields.io/badge/Storage-R2-ff9f1a?style=for-the-badge" />
+  <img alt="D1" src="https://img.shields.io/badge/Database-D1-0ea5e9?style=for-the-badge" />
+  <img alt="KV" src="https://img.shields.io/badge/Cache-KV-7c3aed?style=for-the-badge" />
+</p>
 
-## Deployment
+<p align="center">
+  A Cloudflare-native file hosting project.<br/>
+  Supports <b>any file format upload</b>, admin management, block/whitelist policies, and legacy Telegraph fallback.
+</p>
 
-### Preparation
+<p align="center">
+  <a href="https://dash.cloudflare.com/?to=/:account/pages/new">
+    <img alt="Deploy to Cloudflare" src="https://img.shields.io/badge/Deploy%20to-Cloudflare-F38020?style=for-the-badge&logo=cloudflare&logoColor=white" />
+  </a>
+</p>
 
-The only thing you need to prepare in advance is a Cloudflare account
+---
 
-### Step by Step Instruction
+## Contents
 
-3 simple steps to deploy this project and have your own image hosting
+1. [Highlights](#highlights)
+2. [Architecture](#architecture)
+3. [Quick Deploy](#quick-deploy)
+4. [Bindings and Env](#bindings-and-env)
+5. [API](#api)
 
-1.Fork this repository (Note: In order to make this work. You have to using Git or Wrangler CLI to deploy this project. [Document](https://developers.cloudflare.com/pages/functions/get-started/#deploy-your-function))
+---
 
-2.Open the Cloudflare Dashboard, enter the Pages management page, choose to create a project, then choose `Connecting to the Git Provider`
+## Highlights
 
-![1](https://telegraph-image.pages.dev/file/8d4ef9b7761a25821d9c2.png)
+- Upload any file type
+- R2 for file body storage
+- D1 for metadata/index/moderation states
+- Optional KV for compatibility/cache
+- Admin dashboard with list/block/whitelist/delete
+- Telegraph fallback for legacy `/file/*` links
 
-3. Follow the prompts on the page to enter the project name, select the git repository you need to connect to, then click `Deploy`
+---
 
-## Features
+## Architecture
 
-1. Unlimited number of images stored, you can upload an unlimited number of images
+```mermaid
+flowchart LR
+  U[User / Browser] --> P[Cloudflare Pages]
+  P --> F[Pages Functions]
+  F --> R2[(R2 Bucket)]
+  F --> D1[(D1 SQL)]
+  F --> KV[(Workers KV optional)]
+  F --> T[Telegraph Fallback]
+```
 
-2. No need to buy a server, hosted on Cloudflare's network, when the use does not exceed Cloudflare's free quota, completely free
+Recommended storage split:
 
-3. No need to buy a domain name, you can use the free second-level domain name `*.pages.dev` provided by Cloudflare Pages, and also support binding custom domain names
+- File objects: `R2`
+- Structured metadata: `D1`
+- Lightweight cache/compatibility: `KV`
 
-4. Support image review API, can be opened as needed, after opening undesirable images will be automatically blocked, no longer loaded
+---
 
-### Add custom domains
+## Quick Deploy
 
-Inside the custom domain of pages, bind the domain name that exists in your Cloudflare account, the domain name hosted in cloudflare, will automatically modify the dns record
-![2](https://telegraph-image.pages.dev/file/29546e3a7465a01281ee2.png)
+1. Create a Cloudflare Pages project and connect this repo.
+2. Create an R2 bucket, for example `telegraph-image-files`.
+3. Create a D1 database, for example `telegraph_image`.
+4. Optionally create a KV namespace and bind it as `img_url`.
+5. Fill your real IDs in `wrangler.toml`.
+6. Apply D1 migration:
 
-### Setup image review API
+```bash
+wrangler d1 migrations apply telegraph_image
+```
 
-1. Please go to https://moderatecontent.com/ to register and get a free API key for reviewing image content
+---
 
-2. Open the settings of Cloudflare Pages, click `Settings`, `Environment Variables`, `Add Environment Variables` in turn
+## Bindings and Env
 
-3. Add a `variable` name as `ModerateContentApiKey`, `value` as the `API key` you just got in the first step, click `Save` to
+### Required Bindings
 
-Note: Since the changes will take effect on the next deployment, you may need to go to the `Deploy` page and redeploy the project
+- `FILE_BUCKET` => R2 bucket
+- `DB` => D1 database
 
-When image review is enabled, the first time image load will be slow because it takes time to review, but the subsequent image load will not be affected due to the existence of cache
-![3](https://telegraph-image.pages.dev/file/bae511fb116b034ef9c14.png)
+### Optional Binding
 
-### Limitations
+- `img_url` => KV namespace
 
-1. Since the image files are actually stored in Telegraph, Telegraph limits the size of uploaded images to a maximum of 5MB
+### Optional Environment Variables
 
-2. Due to the use of Cloudflare's network, the loading speed of images may not be guaranteed in some areas.
+- `BASIC_USER` / `BASIC_PASS`
+- `WhiteList_Mode=true`
+- `ModerateContentApiKey`
 
-3. The free version of Cloudflare Function is limited to 100,000 requests per day (i.e. the total number of uploads or loads of images cannot exceed 100,000), if this is exceeded, you may need to choose to purchase the paid package of Cloudflare Function.
+---
 
-### Thanks
+## API
 
-Ideas and code provided by Hostloc @feixiang and @乌拉擦
+- `POST /upload`
+  - Input: `multipart/form-data`, field `file` (also supports `Files`)
+  - Output: `[{ "src": "/file/<id>" }]` (frontend-compatible)
+- `GET /file/:id`
+- `GET /api/manage/list`
+- `GET /api/manage/block/:id`
+- `GET /api/manage/white/:id`
+- `GET /api/manage/delete/:id`
+
+---
+
+Chinese + embedded English: see [README.md](./README.md)

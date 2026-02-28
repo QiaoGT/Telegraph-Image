@@ -1,19 +1,43 @@
-export async function onRequestPost(context) {  // Contents of context object  
-    const {   
-        request, // same as existing Worker API    
-    env, // same as existing Worker API    
-    params, // if filename includes [id] or [[path]]   
-     waitUntil, // same as ctx.waitUntil in existing Worker API    
-     next, // used for middleware or to fetch assets    
-     data, // arbitrary space for passing data between middlewares 
-     } = context;
-     context.request
-     const url = new URL(request.url);
-     const response = fetch('https://telegra.ph/' + url.pathname + url.search, {
-         method: request.method,
-         headers: request.headers,
-         body: request.body,
-     });
-    return response;
+import { createFileId, upsertRecord } from "./_lib/storage";
+
+export async function onRequestPost(context) {
+  const { request, env } = context;
+
+  if (!env.FILE_BUCKET) {
+    return new Response("R2 bucket binding FILE_BUCKET is required.", {
+      status: 500,
+    });
   }
+
+  const formData = await request.formData();
+  const input = formData.get("file") || formData.get("Files");
+  if (!(input instanceof File)) {
+    return new Response("No file uploaded.", { status: 400 });
+  }
+
+  const id = createFileId(input.name || "");
+  const objectBody = await input.arrayBuffer();
+  const contentType = input.type || "application/octet-stream";
+
+  await env.FILE_BUCKET.put(id, objectBody, {
+    httpMetadata: {
+      contentType,
+    },
+  });
+
+  await upsertRecord(env, {
+    id,
+    key: id,
+    source: "r2",
+    contentType,
+    size: input.size || 0,
+    ext: id.includes(".") ? id.slice(id.lastIndexOf(".")) : "",
+    listType: "None",
+    label: "None",
+    timeStamp: Date.now(),
+  });
+
+  const payload = [{ src: `/file/${id}` }];
+  return Response.json(payload);
+}
   

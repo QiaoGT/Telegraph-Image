@@ -71,8 +71,11 @@ async function errorHandling(context) {
     //context.env.BASIC_USER="admin"
     //context.env.BASIC_PASS="admin"
     //check if the env variables Disable_Dashboard are set
-    if (typeof context.env.img_url == "undefined" || context.env.img_url == null || context.env.img_url == "") {
-        return new Response('Dashboard is disabled. Please bind a KV namespace to use this feature.', { status: 200 });
+    if (
+      (typeof context.env.img_url == "undefined" || context.env.img_url == null || context.env.img_url == "") &&
+      !context.env.DB
+    ) {
+        return new Response('Dashboard is disabled. Please bind D1 (DB) or KV (img_url) to use this feature.', { status: 200 });
     }
 
     console.log(context.env.BASIC_USER)
