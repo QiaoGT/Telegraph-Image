@@ -1,4 +1,8 @@
-import { createFileId, upsertRecord } from "./_lib/storage";
+import {
+  createObjectKey,
+  guessMimeTypeFromName,
+  upsertRecord,
+} from "./_lib/storage";
 
 export async function onRequestPost(context) {
   const { request, env } = context;
@@ -20,9 +24,12 @@ export async function onRequestPost(context) {
       return new Response("No file uploaded.", { status: 400 });
     }
 
-    const id = createFileId(input.name || "");
+    const originalName = input.name || `file-${crypto.randomUUID()}`;
+    const id = await createObjectKey(env, originalName);
     const objectBody = await input.arrayBuffer();
-    const contentType = input.type || "application/octet-stream";
+    const contentType =
+      input.type || guessMimeTypeFromName(originalName) || "application/octet-stream";
+    const fileType = (originalName.split(".").pop() || "").toLowerCase();
 
     await env.FILE_BUCKET.put(id, objectBody, {
       httpMetadata: {
@@ -39,6 +46,8 @@ export async function onRequestPost(context) {
         contentType,
         size: input.size || 0,
         ext: id.includes(".") ? id.slice(id.lastIndexOf(".")) : "",
+        originalName,
+        fileType,
         listType: "None",
         label: "None",
         timeStamp: Date.now(),
@@ -47,7 +56,7 @@ export async function onRequestPost(context) {
       console.error("Metadata upsert failed:", metaErr);
     }
 
-    const payload = [{ src: `/file/${id}` }];
+    const payload = [{ src: `/file/${encodeURIComponent(id)}` }];
     return Response.json(payload);
   } catch (err) {
     console.error("Upload failed:", err);

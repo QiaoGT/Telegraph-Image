@@ -1,4 +1,4 @@
-import { getRecord, upsertRecord } from "../_lib/storage";
+import { getRecord, guessMimeTypeFromName, upsertRecord } from "../_lib/storage";
 
 function isBlocked(record) {
   if (!record) return false;
@@ -60,13 +60,19 @@ export async function onRequest(context) {
     const object = await env.FILE_BUCKET.get(id);
     if (object) {
       if (!record) {
+        const fallbackType =
+          object.httpMetadata?.contentType ||
+          guessMimeTypeFromName(id) ||
+          "application/octet-stream";
         await upsertRecord(env, {
           id,
           key: id,
           source: "r2",
-          contentType: object.httpMetadata?.contentType || "application/octet-stream",
+          contentType: fallbackType,
           size: object.size || 0,
           ext: id.includes(".") ? id.slice(id.lastIndexOf(".")) : "",
+          originalName: id,
+          fileType: (id.split(".").pop() || "").toLowerCase(),
           listType: "None",
           label: "None",
           timeStamp: Date.now(),
@@ -75,6 +81,12 @@ export async function onRequest(context) {
 
       const headers = new Headers();
       setObjectHeaders(headers, object);
+      if (!headers.get("Content-Type")) {
+        headers.set(
+          "Content-Type",
+          guessMimeTypeFromName(id) || "application/octet-stream"
+        );
+      }
       if (method === "HEAD") {
         return new Response(null, { headers });
       }
