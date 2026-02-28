@@ -1,10 +1,8 @@
 import { requireBasicAuth } from "./_lib/basic-auth";
 
 export async function onRequest(context) {
-  const { request, env } = context;
+  const { request, env, next } = context;
   const authResponse = requireBasicAuth(request, env);
   if (authResponse) return authResponse;
-
-  const url = new URL(request.url);
-  return Response.redirect(`${url.origin}/admin.html`, 302);
+  return next();
 }
