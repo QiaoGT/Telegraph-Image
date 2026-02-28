@@ -145,17 +145,19 @@
   function createUploadContext() {
     const ctx = {
       cancelled: false,
-      controllers: new Set(),
+      abortables: new Set(),
       cancel() {
         this.cancelled = true;
-        for (const c of this.controllers) c.abort();
-        this.controllers.clear();
+        for (const a of this.abortables) {
+          try { a.abort(); } catch {}
+        }
+        this.abortables.clear();
       },
-      track(controller) {
-        this.controllers.add(controller);
+      track(abortable) {
+        this.abortables.add(abortable);
       },
-      untrack(controller) {
-        this.controllers.delete(controller);
+      untrack(abortable) {
+        this.abortables.delete(abortable);
       },
     };
     return ctx;
@@ -175,6 +177,40 @@
     return new Promise((r) => setTimeout(r, ms));
   }
 
+  function xhrPutWithProgress(url, blob, ctx, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", url);
+      ctx.track(xhr);
+
+      xhr.upload.onprogress = (ev) => {
+        if (!ev.lengthComputable) return;
+        onProgress(ev.loaded, ev.total);
+      };
+      xhr.onload = () => {
+        ctx.untrack(xhr);
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new Error("HTTP " + xhr.status));
+          return;
+        }
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch {
+          reject(new Error("Invalid JSON response"));
+        }
+      };
+      xhr.onerror = () => {
+        ctx.untrack(xhr);
+        reject(new Error("Network error"));
+      };
+      xhr.onabort = () => {
+        ctx.untrack(xhr);
+        reject(new Error("Upload cancelled"));
+      };
+      xhr.send(blob);
+    });
+  }
+
   async function uploadWithMultipart(file, ctx) {
     const initRes = await fetchWithAbort("/api/upload/init", {
       method: "POST",
@@ -192,30 +228,42 @@
 
     const parts = new Array(totalParts);
     let uploadedBytes = 0;
+    const livePartProgress = new Array(totalParts).fill(0);
+    function refreshProgress() {
+      const inFlight = livePartProgress.reduce((a, b) => a + b, 0);
+      const pct = ((uploadedBytes + inFlight) / file.size) * 100;
+      setProgress(pct);
+      setStatus(`上传中 ${pct.toFixed(1)}%`);
+    }
 
     async function uploadPart(i) {
       const start = i * partSize;
       const end = Math.min(file.size, start + partSize);
       const blob = file.slice(start, end);
       const partNumber = i + 1;
+      const partTotal = blob.size;
       let attempt = 0;
       while (attempt < 3) {
         if (ctx.cancelled) throw new Error("Upload cancelled");
         try {
-          const res = await fetchWithAbort(
+          livePartProgress[i] = 0;
+          const data = await xhrPutWithProgress(
             `/api/upload/part?key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=${partNumber}`,
-            { method: "PUT", body: blob },
-            ctx
+            blob,
+            ctx,
+            (loaded) => {
+              livePartProgress[i] = loaded;
+              refreshProgress();
+            }
           );
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
           parts[i] = { partNumber, etag: data.etag };
-          uploadedBytes += blob.size;
-          const pct = (uploadedBytes / file.size) * 100;
-          setProgress(pct);
-          setStatus(`上传中 ${pct.toFixed(1)}%`);
+          livePartProgress[i] = 0;
+          uploadedBytes += partTotal;
+          refreshProgress();
           return;
         } catch (e) {
+          livePartProgress[i] = 0;
+          refreshProgress();
           attempt += 1;
           if (ctx.cancelled) throw new Error("Upload cancelled");
           if (attempt >= 3) {
