@@ -19,8 +19,8 @@ function normalizeRecord(row) {
 
 export async function ensureSchema(env) {
   if (!env.DB) return;
-  await env.DB.exec(`
-    CREATE TABLE IF NOT EXISTS files (
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS files (
       id TEXT PRIMARY KEY,
       r2_key TEXT NOT NULL,
       source TEXT NOT NULL DEFAULT 'r2',
@@ -31,9 +31,11 @@ export async function ensureSchema(env) {
       label TEXT NOT NULL DEFAULT 'None',
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_files_created_at ON files(created_at DESC);
-  `);
+    )`
+  ).run();
+  await env.DB.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_files_created_at ON files(created_at DESC)"
+  ).run();
 }
 
 export async function getRecord(env, id) {
