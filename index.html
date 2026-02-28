@@ -32,20 +32,36 @@
     }
     .card {
       width: 100%;
-      max-width: 720px;
+      max-width: 760px;
       background: var(--card);
       border-radius: 18px;
       box-shadow: 0 22px 60px rgba(0, 0, 0, .28);
       padding: 24px;
     }
-    h1 { margin: 0; font-size: 46px; letter-spacing: .2px; }
-    .sub { margin: 8px 0 18px; color: var(--muted); font-size: 16px; }
+    h1 { margin: 0; font-size: 40px; letter-spacing: .2px; }
+    .sub { margin: 8px 0 18px; color: var(--muted); font-size: 15px; }
     .row { display: flex; flex-wrap: wrap; gap: 10px; }
+    .drop-zone {
+      margin-top: 12px;
+      border: 2px dashed #b9c8dd;
+      border-radius: 12px;
+      padding: 16px;
+      color: #4c6585;
+      background: #f8fbff;
+      text-align: center;
+      transition: .2s ease;
+      font-size: 14px;
+    }
+    .drop-zone.dragover {
+      border-color: #2a8cff;
+      background: #eef6ff;
+      color: #1f4e86;
+    }
     .btn {
       border: 0;
       border-radius: 10px;
       padding: 10px 16px;
-      font-size: 18px;
+      font-size: 16px;
       font-weight: 700;
       cursor: pointer;
     }
@@ -79,15 +95,18 @@
       height: 100%;
       width: 0%;
       background: linear-gradient(90deg, #28a0ff, #f38020);
-      transition: width .15s linear;
+      transition: width .1s linear;
     }
     .out { margin-top: 12px; display: grid; gap: 8px; }
-    .out input {
+    .out textarea {
       width: 100%;
       border: 1px solid #d6deea;
       border-radius: 10px;
       padding: 10px 12px;
-      font-size: 14px;
+      font-size: 13px;
+      min-height: 90px;
+      resize: vertical;
+      font-family: Consolas, Menlo, monospace;
     }
     .footer { margin-top: 14px; color: var(--muted); font-size: 13px; }
     a { color: #2a5f9c; text-decoration: none; }
@@ -96,22 +115,24 @@
 <body>
 <main class="card">
   <h1>Telegraph-Image</h1>
-  <p class="sub">Cloudflare Pages + Functions + R2 + D1。支持任意文件格式上传。</p>
+  <p class="sub">Cloudflare Pages + Functions + R2 + D1。支持多文件批量上传。</p>
 
   <div class="row">
-    <label for="fileInput" class="btn btn-primary">选择文件</label>
-    <input id="fileInput" type="file" accept="*/*">
+    <label for="fileInput" class="btn btn-primary">选择文件（可多选）</label>
+    <input id="fileInput" type="file" accept="*/*" multiple>
     <button id="uploadBtn" class="btn btn-ghost" type="button">开始上传</button>
     <button id="cancelBtn" class="btn btn-ghost" type="button" style="display:none">取消上传</button>
-    <button id="copyBtn" class="btn btn-ghost" type="button">复制链接</button>
+    <button id="copyLinksBtn" class="btn btn-ghost" type="button">批量复制链接</button>
+    <button id="copyMdBtn" class="btn btn-ghost" type="button">批量复制Markdown</button>
   </div>
+  <div id="dropZone" class="drop-zone">可拖拽多个文件到这里</div>
 
   <div id="status" class="status">等待选择文件</div>
   <div id="progressWrap" class="progress-wrap"><div id="progressBar" class="progress-bar"></div></div>
 
   <section class="out">
-    <input id="urlOut" readonly placeholder="上传后会显示文件 URL">
-    <input id="mdOut" readonly placeholder="上传后会显示 Markdown 链接">
+    <textarea id="urlOut" readonly placeholder="上传后会显示文件链接（每行一条）"></textarea>
+    <textarea id="mdOut" readonly placeholder="上传后会显示 Markdown 链接（每行一条）"></textarea>
   </section>
   <p class="footer">管理面板：<a href="/admin">/admin</a></p>
 </main>
@@ -120,13 +141,16 @@
   const fileInput = document.getElementById("fileInput");
   const uploadBtn = document.getElementById("uploadBtn");
   const cancelBtn = document.getElementById("cancelBtn");
-  const copyBtn = document.getElementById("copyBtn");
+  const copyLinksBtn = document.getElementById("copyLinksBtn");
+  const copyMdBtn = document.getElementById("copyMdBtn");
+  const dropZone = document.getElementById("dropZone");
   const statusEl = document.getElementById("status");
   const progressWrap = document.getElementById("progressWrap");
   const progressBar = document.getElementById("progressBar");
   const urlOut = document.getElementById("urlOut");
   const mdOut = document.getElementById("mdOut");
-  let selectedFile = null;
+
+  let selectedFiles = [];
   let activeUpload = null;
 
   function setStatus(msg, type) {
@@ -143,7 +167,7 @@
   }
 
   function createUploadContext() {
-    const ctx = {
+    return {
       cancelled: false,
       abortables: new Set(),
       cancel() {
@@ -153,14 +177,9 @@
         }
         this.abortables.clear();
       },
-      track(abortable) {
-        this.abortables.add(abortable);
-      },
-      untrack(abortable) {
-        this.abortables.delete(abortable);
-      },
+      track(abortable) { this.abortables.add(abortable); },
+      untrack(abortable) { this.abortables.delete(abortable); },
     };
-    return ctx;
   }
 
   async function fetchWithAbort(url, options, ctx) {
@@ -211,16 +230,20 @@
     });
   }
 
-  async function uploadWithMultipart(file, ctx) {
-    const initRes = await fetchWithAbort("/api/upload/init", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filename: file.name,
-        size: file.size,
-        contentType: file.type || "",
-      }),
-    }, ctx);
+  async function uploadWithMultipart(file, ctx, onProgress, onStatus) {
+    const initRes = await fetchWithAbort(
+      "/api/upload/init",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: file.name,
+          size: file.size,
+          contentType: file.type || "",
+        }),
+      },
+      ctx
+    );
     if (!initRes.ok) throw new Error("Init failed: " + initRes.status);
     const init = await initRes.json();
     const { uploadId, key, partSize, totalParts, contentType, originalName, fileType } = init;
@@ -229,11 +252,12 @@
     const parts = new Array(totalParts);
     let uploadedBytes = 0;
     const livePartProgress = new Array(totalParts).fill(0);
-    function refreshProgress() {
+
+    function refreshLocalProgress() {
       const inFlight = livePartProgress.reduce((a, b) => a + b, 0);
       const pct = ((uploadedBytes + inFlight) / file.size) * 100;
-      setProgress(pct);
-      setStatus(`上传中 ${pct.toFixed(1)}%`);
+      onProgress(pct);
+      if (onStatus) onStatus(pct);
     }
 
     async function uploadPart(i) {
@@ -242,6 +266,7 @@
       const blob = file.slice(start, end);
       const partNumber = i + 1;
       const partTotal = blob.size;
+
       let attempt = 0;
       while (attempt < 3) {
         if (ctx.cancelled) throw new Error("Upload cancelled");
@@ -253,17 +278,17 @@
             ctx,
             (loaded) => {
               livePartProgress[i] = loaded;
-              refreshProgress();
+              refreshLocalProgress();
             }
           );
           parts[i] = { partNumber, etag: data.etag };
           livePartProgress[i] = 0;
           uploadedBytes += partTotal;
-          refreshProgress();
+          refreshLocalProgress();
           return;
         } catch (e) {
           livePartProgress[i] = 0;
-          refreshProgress();
+          refreshLocalProgress();
           attempt += 1;
           if (ctx.cancelled) throw new Error("Upload cancelled");
           if (attempt >= 3) {
@@ -284,37 +309,78 @@
     });
     await Promise.all(workers);
 
-    const completeRes = await fetchWithAbort("/api/upload/complete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        key,
-        uploadId,
-        originalName,
-        fileType,
-        contentType,
-        size: file.size,
-        parts,
-      }),
-    }, ctx);
-    if (!completeRes.ok) {
-      throw new Error("Complete failed: " + completeRes.status);
-    }
+    const completeRes = await fetchWithAbort(
+      "/api/upload/complete",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key,
+          uploadId,
+          originalName,
+          fileType,
+          contentType,
+          size: file.size,
+          parts,
+        }),
+      },
+      ctx
+    );
+    if (!completeRes.ok) throw new Error("Complete failed: " + completeRes.status);
     return completeRes.json();
   }
 
   fileInput.addEventListener("change", () => {
-    selectedFile = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
-    if (selectedFile) {
-      setStatus(`已选择：${selectedFile.name} (${selectedFile.size} bytes)`);
+    selectedFiles = fileInput.files ? Array.from(fileInput.files) : [];
+    if (selectedFiles.length) {
+      const totalBytes = selectedFiles.reduce((n, f) => n + (f.size || 0), 0);
+      setStatus(`已选择 ${selectedFiles.length} 个文件，总大小 ${(totalBytes / 1024 / 1024).toFixed(2)} MB`);
     } else {
       setStatus("等待选择文件");
     }
   });
 
+  function mergeSelectedFiles(newFiles) {
+    const list = Array.isArray(newFiles) ? newFiles : [];
+    if (!list.length) return;
+    const map = new Map();
+    for (const f of selectedFiles) {
+      const key = `${f.name}__${f.size}__${f.lastModified}`;
+      map.set(key, f);
+    }
+    for (const f of list) {
+      const key = `${f.name}__${f.size}__${f.lastModified}`;
+      if (!map.has(key)) map.set(key, f);
+    }
+    selectedFiles = Array.from(map.values());
+    const totalBytes = selectedFiles.reduce((n, f) => n + (f.size || 0), 0);
+    setStatus(`已选择 ${selectedFiles.length} 个文件，总大小 ${(totalBytes / 1024 / 1024).toFixed(2)} MB`);
+  }
+
+  ;["dragenter", "dragover"].forEach((evt) => {
+    dropZone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.add("dragover");
+    });
+  });
+  ;["dragleave", "drop"].forEach((evt) => {
+    dropZone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.remove("dragover");
+    });
+  });
+  dropZone.addEventListener("drop", (e) => {
+    const files = e.dataTransfer && e.dataTransfer.files
+      ? Array.from(e.dataTransfer.files)
+      : [];
+    mergeSelectedFiles(files);
+  });
+
   uploadBtn.addEventListener("click", async () => {
-    if (!selectedFile) {
-      setStatus("请先选择文件", "err");
+    if (!selectedFiles.length) {
+      setStatus("请先选择文件（可多选）", "err");
       return;
     }
     try {
@@ -323,18 +389,42 @@
       cancelBtn.style.display = "inline-block";
       uploadBtn.disabled = true;
       resetProgress();
-      const json = await uploadWithMultipart(selectedFile, activeUpload);
-      const src = json && json[0] && json[0].src;
-      if (!src) throw new Error("Missing src");
-      const url = `${location.origin}${decodeURIComponent(src)}`;
-      urlOut.value = url;
-      mdOut.value = `![](${url})`;
+
+      const totalCount = selectedFiles.length;
+      let finishedCount = 0;
+      const successLinks = [];
+
+      for (let i = 0; i < selectedFiles.length; i += 1) {
+        const file = selectedFiles[i];
+        if (activeUpload.cancelled) throw new Error("Upload cancelled");
+
+        const base = (finishedCount / totalCount) * 100;
+        const weight = 100 / totalCount;
+        setStatus(`正在上传第 ${i + 1}/${totalCount} 个：${file.name}`);
+
+        const json = await uploadWithMultipart(
+          file,
+          activeUpload,
+          (localPct) => setProgress(base + (localPct * weight / 100)),
+          (localPct) => setStatus(`正在上传第 ${i + 1}/${totalCount} 个：${file.name} (${localPct.toFixed(1)}%)`)
+        );
+
+        const src = json && json[0] && json[0].src;
+        if (!src) throw new Error("Missing src");
+        const url = `${location.origin}${decodeURIComponent(src)}`;
+        successLinks.push(url);
+        finishedCount += 1;
+        setProgress((finishedCount / totalCount) * 100);
+      }
+
+      urlOut.value = successLinks.join("\n");
+      mdOut.value = successLinks.map((u) => `![](${u})`).join("\n");
+      setStatus(`上传成功，共 ${successLinks.length} 个文件`, "ok");
       setProgress(100);
-      setStatus("上传成功", "ok");
-      setTimeout(resetProgress, 700);
+      setTimeout(resetProgress, 900);
     } catch (e) {
       console.error(e);
-      if (String(e && e.message || e).includes("cancel")) {
+      if (String(e && e.message || e).toLowerCase().includes("cancel")) {
         setStatus("已取消上传", "err");
       } else {
         setStatus("上传失败，请重试", "err");
@@ -351,18 +441,33 @@
     activeUpload.cancel();
   });
 
-  copyBtn.addEventListener("click", async () => {
+  copyLinksBtn.addEventListener("click", async () => {
     if (!urlOut.value) {
       setStatus("没有可复制的链接", "err");
       return;
     }
     try {
       await navigator.clipboard.writeText(urlOut.value);
-      setStatus("链接已复制", "ok");
+      setStatus("链接已复制（每行一条）", "ok");
     } catch {
       urlOut.select();
       document.execCommand("copy");
-      setStatus("链接已复制", "ok");
+      setStatus("链接已复制（每行一条）", "ok");
+    }
+  });
+
+  copyMdBtn.addEventListener("click", async () => {
+    if (!mdOut.value) {
+      setStatus("没有可复制的Markdown", "err");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(mdOut.value);
+      setStatus("Markdown 已复制（每行一条）", "ok");
+    } catch {
+      mdOut.select();
+      document.execCommand("copy");
+      setStatus("Markdown 已复制（每行一条）", "ok");
     }
   });
 </script>
