@@ -135,7 +135,7 @@
     }
 
     window.handleCopy = async function (nameEncoded) {
-      const text = `${location.origin}/file/${nameEncoded}`;
+      const text = `${location.origin}/file/${decodeURIComponent(nameEncoded)}`;
       await navigator.clipboard.writeText(text);
       alert("已复制链接");
     };

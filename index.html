@@ -186,7 +186,7 @@
       const json = await uploadWithProgress(selectedFile);
       const src = json && json[0] && json[0].src;
       if (!src) throw new Error("Missing src");
-      const url = new URL(src, location.origin).toString();
+      const url = `${location.origin}${decodeURIComponent(src)}`;
       urlOut.value = url;
       mdOut.value = `![](${url})`;
       setProgress(100);

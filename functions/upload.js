@@ -56,7 +56,7 @@ export async function onRequestPost(context) {
       console.error("Metadata upsert failed:", metaErr);
     }
 
-    const payload = [{ src: `/file/${encodeURIComponent(id)}` }];
+    const payload = [{ src: `/file/${id}` }];
     return Response.json(payload);
   } catch (err) {
     console.error("Upload failed:", err);
