@@ -74,11 +74,13 @@ export async function ensureSchema(env) {
 export function sanitizeFilename(input = "") {
   const name = String(input || "").trim();
   if (!name) return "";
+  // Keep original Unicode characters as much as possible.
+  // Only replace characters that break URL path / object key semantics.
   return name
-    .replace(/\s+/g, "_")
-    .replace(/[^\w.\-()]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "")
+    .normalize("NFKC")
+    .replace(/[\u0000-\u001F\u007F]/g, "_")
+    .replace(/[\/\\?#%*:|"<>]/g, "_")
+    .replace(/\s+$/g, "")
     .slice(0, 180);
 }
 
