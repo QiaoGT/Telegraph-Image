@@ -22,6 +22,16 @@
     h1 { margin: 0; font-size: 28px; }
     .search { width: 340px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; }
     .toolbar { display: flex; gap: 8px; align-items: center; }
+    .btn-copy-batch {
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      color: #fff;
+      background: var(--pri);
+      font-size: 13px;
+      font-weight: 700;
+    }
     .btn-batch {
       border: 0;
       border-radius: 8px;
@@ -57,6 +67,7 @@
     <div class="top">
       <h1>Dashboard</h1>
       <div class="toolbar">
+        <button id="copySelectedBtn" class="btn-copy-batch" type="button">复制选中</button>
         <button id="deleteSelectedBtn" class="btn-batch" type="button">删除选中</button>
         <input id="search" class="search" placeholder="按文件名搜索">
       </div>
@@ -88,6 +99,7 @@
     const searchEl = document.getElementById("search");
     const selectAllEl = document.getElementById("selectAll");
     const deleteSelectedBtn = document.getElementById("deleteSelectedBtn");
+    const copySelectedBtn = document.getElementById("copySelectedBtn");
 
     function extOf(name) {
       const i = name.lastIndexOf(".");
@@ -224,6 +236,19 @@
       }
       await loadData();
       alert("删除完成");
+    });
+
+    copySelectedBtn.addEventListener("click", async () => {
+      if (selectedKeys.size === 0) {
+        alert("请先勾选文件");
+        return;
+      }
+      const links = Array.from(selectedKeys).map((name) => {
+        return `${location.origin}/file/${decodeURIComponent(encodeURIComponent(name))}`;
+      });
+      const text = links.join("\n");
+      await navigator.clipboard.writeText(text);
+      alert(`已复制 ${links.length} 条链接（每行一条）`);
     });
 
     loadData().catch((e) => {
