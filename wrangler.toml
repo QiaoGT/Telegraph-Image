@@ -9,8 +9,8 @@ bucket_name = "telegraph-image-files"
 [[d1_databases]]
 binding = "DB"
 database_name = "telegraph_image"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "5c4e4696-4a83-41dd-80a4-ff58b7c73349"
 
 [[kv_namespaces]]
 binding = "img_url"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+id = "5d47a06d84d54b5cb74425d02d4a3a5b"
